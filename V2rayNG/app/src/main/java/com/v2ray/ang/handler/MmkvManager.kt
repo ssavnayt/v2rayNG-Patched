@@ -542,27 +542,35 @@ object MmkvManager {
      * @return The number of server configurations removed.
      */
     fun removeInvalidServer(guid: String): Int {
-        var count = 0
         if (guid.isNotEmpty()) {
-            decodeServerAffiliationInfo(guid)?.let { aff ->
-                if (aff.testDelayMillis < 0L) {
-                    removeServer(guid)
-                    count++
-                }
+            val delay = decodeServerTestDelayMillis(guid)
+            if (delay != null && delay < 0L) {
+                val config = decodeServerConfig(guid)
+                removeServers(listOf(guid), config?.subscriptionId ?: DEFAULT_SUBSCRIPTION_ID)
+                return 1
             }
-        } else {
-            serverAffStorage.allKeys()?.forEach { key ->
-                decodeServerAffiliationInfo(key)?.let { aff ->
-                    if (aff.testDelayMillis < 0L) {
-                        removeServer(key)
-                        count++
-                    }
-                }
+            return 0
+        }
+
+        val invalid = serverAffStorage.allKeys()
+            ?.asSequence()
+            ?.filter { decodeServerTestDelayMillis(it)?.let { delay -> delay < 0L } == true }
+            ?.toHashSet()
+            ?: emptySet()
+
+        if (invalid.isEmpty()) return 0
+
+        var removed = 0
+        val groups = (decodeSubsList() + DEFAULT_SUBSCRIPTION_ID).distinct()
+        groups.forEach { groupId ->
+            val groupInvalid = decodeServerList(groupId).filter(invalid::contains)
+            if (groupInvalid.isNotEmpty()) {
+                removeServers(groupInvalid, groupId)
+                removed += groupInvalid.size
             }
         }
-        return count
+        return removed
     }
-
     /**
      * Encodes the raw server configuration.
      *
