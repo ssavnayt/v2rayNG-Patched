@@ -35,6 +35,9 @@ internal class ProfileStorageException(message: String) : IllegalStateException(
 
 object MmkvManager {
 
+    // Hot-path cache: avoids JSON parsing for every sort/remove lookup.
+    private val testDelayCache = ConcurrentHashMap<String, Long>()
+
     //region private
 
     private const val ID_MAIN = "MAIN"
@@ -451,6 +454,7 @@ object MmkvManager {
             }
             profileFullStorage.remove(guid)
             serverAffStorage.remove(guid)
+            testDelayCache.remove(guid)
             serverRawStorage.remove(guid)
         }
     }
@@ -465,11 +469,12 @@ object MmkvManager {
         if (guid.isBlank()) {
             return null
         }
+        testDelayCache[guid]?.let { return ServerAffiliationInfo().apply { testDelayMillis = it } }
         val json = serverAffStorage.decodeString(guid)
         if (json.isNullOrBlank()) {
             return null
         }
-        return JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)
+        return JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)?.also { testDelayCache[guid] = it.testDelayMillis }
     }
 
     /**
@@ -484,6 +489,7 @@ object MmkvManager {
         }
         val aff = decodeServerAffiliationInfo(guid) ?: ServerAffiliationInfo()
         aff.testDelayMillis = testResult
+        testDelayCache[guid] = testResult
         serverAffStorage.encode(guid, JsonUtil.toJson(aff))
     }
 
@@ -496,6 +502,7 @@ object MmkvManager {
         keys?.forEach { key ->
             decodeServerAffiliationInfo(key)?.let { aff ->
                 aff.testDelayMillis = 0
+                testDelayCache[key] = 0L
                 serverAffStorage.encode(key, JsonUtil.toJson(aff))
             }
         }
@@ -511,6 +518,7 @@ object MmkvManager {
         profileFullStorage.clearAll()
         serverAffStorage.clearAll()
         serverRawStorage.clearAll()
+        testDelayCache.clear()
 
         decodeSubscriptions().forEach { sub ->
             encodeServerList(mutableListOf(), sub.guid)
