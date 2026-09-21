@@ -483,6 +483,15 @@ object MmkvManager {
      * @param guid The server GUID.
      * @param testResult The test delay in milliseconds.
      */
+    fun decodeServerTestDelayMillis(guid: String): Long? {
+        if (guid.isBlank()) return null
+        testDelayCache[guid]?.let { return it }
+        val json = serverAffStorage.decodeString(guid) ?: return null
+        val delay = JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)?.testDelayMillis
+        if (delay != null) testDelayCache[guid] = delay
+        return delay
+    }
+
     fun encodeServerTestDelayMillis(guid: String, testResult: Long) {
         if (guid.isBlank()) {
             return
