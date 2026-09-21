@@ -30,6 +30,7 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import java.util.concurrent.ConcurrentHashMap
 
 internal class ProfileStorageException(message: String) : IllegalStateException(message)
 
