@@ -345,7 +345,7 @@ class MainViewModel(
             val affiliation = dataSource.decodeAffiliationInfo(guid)
             ServersCache(
                 guid = guid,
-                profile = profile.copy(),
+                profile = profile,
                 testDelayMillis = affiliation?.testDelayMillis ?: 0L
             )
         }
@@ -478,17 +478,9 @@ class MainViewModel(
                     initialPageReady.complete(Unit)
                 }
 
-                val selectedIndex =
-                    groups.indexOfFirst { it.id == selectedGroup }.coerceAtLeast(0)
-                val preloadOrder = radialPreloadOrder(groups, selectedIndex)
-                preloadJob = viewModelScope.launch(preloadDispatcher) {
-                    preloadOrder.forEach { groupId ->
-                        ensureActive()
-                        delay(32)
-                        val servers = loadGroup(groupId, forceRefresh)
-                        updateGroupUi(groupId, servers)
-                    }
-                }
+                // Do not eagerly decode hidden groups. With 100k+ profiles this
+                // unnecessarily multiplies memory use while only one page is visible.
+                preloadJob = null
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
