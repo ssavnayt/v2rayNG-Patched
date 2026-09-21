@@ -30,10 +30,14 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import java.util.concurrent.ConcurrentHashMap
 
 internal class ProfileStorageException(message: String) : IllegalStateException(message)
 
 object MmkvManager {
+
+    // Hot-path cache: avoids JSON parsing for every sort/remove lookup.
+    private val testDelayCache = ConcurrentHashMap<String, Long>()
 
     //region private
 
@@ -451,6 +455,7 @@ object MmkvManager {
             }
             profileFullStorage.remove(guid)
             serverAffStorage.remove(guid)
+            testDelayCache.remove(guid)
             serverRawStorage.remove(guid)
         }
     }
@@ -465,11 +470,12 @@ object MmkvManager {
         if (guid.isBlank()) {
             return null
         }
+        testDelayCache[guid]?.let { return ServerAffiliationInfo().apply { testDelayMillis = it } }
         val json = serverAffStorage.decodeString(guid)
         if (json.isNullOrBlank()) {
             return null
         }
-        return JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)
+        return JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)?.also { testDelayCache[guid] = it.testDelayMillis }
     }
 
     /**
@@ -478,12 +484,22 @@ object MmkvManager {
      * @param guid The server GUID.
      * @param testResult The test delay in milliseconds.
      */
+    fun decodeServerTestDelayMillis(guid: String): Long? {
+        if (guid.isBlank()) return null
+        testDelayCache[guid]?.let { return it }
+        val json = serverAffStorage.decodeString(guid) ?: return null
+        val delay = JsonUtil.fromJsonSafe(json, ServerAffiliationInfo::class.java)?.testDelayMillis
+        if (delay != null) testDelayCache[guid] = delay
+        return delay
+    }
+
     fun encodeServerTestDelayMillis(guid: String, testResult: Long) {
         if (guid.isBlank()) {
             return
         }
         val aff = decodeServerAffiliationInfo(guid) ?: ServerAffiliationInfo()
         aff.testDelayMillis = testResult
+        testDelayCache[guid] = testResult
         serverAffStorage.encode(guid, JsonUtil.toJson(aff))
     }
 
@@ -496,6 +512,7 @@ object MmkvManager {
         keys?.forEach { key ->
             decodeServerAffiliationInfo(key)?.let { aff ->
                 aff.testDelayMillis = 0
+                testDelayCache[key] = 0L
                 serverAffStorage.encode(key, JsonUtil.toJson(aff))
             }
         }
@@ -511,6 +528,7 @@ object MmkvManager {
         profileFullStorage.clearAll()
         serverAffStorage.clearAll()
         serverRawStorage.clearAll()
+        testDelayCache.clear()
 
         decodeSubscriptions().forEach { sub ->
             encodeServerList(mutableListOf(), sub.guid)
@@ -525,27 +543,35 @@ object MmkvManager {
      * @return The number of server configurations removed.
      */
     fun removeInvalidServer(guid: String): Int {
-        var count = 0
         if (guid.isNotEmpty()) {
-            decodeServerAffiliationInfo(guid)?.let { aff ->
-                if (aff.testDelayMillis < 0L) {
-                    removeServer(guid)
-                    count++
-                }
+            val delay = decodeServerTestDelayMillis(guid)
+            if (delay != null && delay < 0L) {
+                val config = decodeServerConfig(guid)
+                removeServers(listOf(guid), config?.subscriptionId ?: DEFAULT_SUBSCRIPTION_ID)
+                return 1
             }
-        } else {
-            serverAffStorage.allKeys()?.forEach { key ->
-                decodeServerAffiliationInfo(key)?.let { aff ->
-                    if (aff.testDelayMillis < 0L) {
-                        removeServer(key)
-                        count++
-                    }
-                }
+            return 0
+        }
+
+        val invalid = serverAffStorage.allKeys()
+            ?.asSequence()
+            ?.filter { decodeServerTestDelayMillis(it)?.let { delay -> delay < 0L } == true }
+            ?.toHashSet()
+            ?: emptySet()
+
+        if (invalid.isEmpty()) return 0
+
+        var removed = 0
+        val groups = (decodeSubsList() + DEFAULT_SUBSCRIPTION_ID).distinct()
+        groups.forEach { groupId ->
+            val groupInvalid = decodeServerList(groupId).filter(invalid::contains)
+            if (groupInvalid.isNotEmpty()) {
+                removeServers(groupInvalid, groupId)
+                removed += groupInvalid.size
             }
         }
-        return count
+        return removed
     }
-
     /**
      * Encodes the raw server configuration.
      *

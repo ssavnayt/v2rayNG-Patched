@@ -172,7 +172,12 @@ class MainRepository(
         if (groupId.isEmpty()) {
             MmkvManager.removeInvalidServer("")
         } else {
-            getServerGuidList(groupId).sumOf(::removeInvalidServerByGuid)
+            val guids = getServerGuidList(groupId)
+            val invalid = guids.filter {
+                MmkvManager.decodeServerTestDelayMillis(it)?.let { delay -> delay < 0L } == true
+            }
+            MmkvManager.removeServers(invalid, groupId)
+            invalid.size
         }
 
     override fun clearAllTestDelayResults(guids: List<String>) =

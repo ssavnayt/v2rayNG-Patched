@@ -550,8 +550,8 @@ object AngConfigManager {
     fun removeInvalidServer(subId: String) {
         val serverList = MmkvManager.decodeServerList(subId)
         val invalidServers = serverList.filter {
-            val aff = MmkvManager.decodeServerAffiliationInfo(it)
-            aff != null && aff.testDelayMillis < 0L
+            val aff = MmkvManager.decodeServerTestDelayMillis(it)
+            (aff ?: 0L) < 0L
         }
         MmkvManager.removeServers(invalidServers, subId)
     }
@@ -566,15 +566,11 @@ object AngConfigManager {
         if (serverList.isEmpty()) return
 
         val sorted = serverList
-            .map { guid ->
-                val delay =
-                    MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
-                guid to if (delay <= 0L) Long.MAX_VALUE else delay
-            }
-            .sortedBy { it.second }
-            .map { it.first }
-            .toMutableList()
-        MmkvManager.encodeServerList(sorted, subId)
+            .sortedWith(compareBy { guid ->
+                val delay = MmkvManager.decodeServerTestDelayMillis(guid) ?: 0L
+                if (delay <= 0L) Long.MAX_VALUE else delay
+            })
+        MmkvManager.encodeServerList(sorted.toMutableList(), subId)
     }
 
     /**

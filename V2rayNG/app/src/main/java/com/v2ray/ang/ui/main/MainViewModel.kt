@@ -345,7 +345,7 @@ class MainViewModel(
             val affiliation = dataSource.decodeAffiliationInfo(guid)
             ServersCache(
                 guid = guid,
-                profile = profile.copy(),
+                profile = profile,
                 testDelayMillis = affiliation?.testDelayMillis ?: 0L
             )
         }
@@ -478,17 +478,9 @@ class MainViewModel(
                     initialPageReady.complete(Unit)
                 }
 
-                val selectedIndex =
-                    groups.indexOfFirst { it.id == selectedGroup }.coerceAtLeast(0)
-                val preloadOrder = radialPreloadOrder(groups, selectedIndex)
-                preloadJob = viewModelScope.launch(preloadDispatcher) {
-                    preloadOrder.forEach { groupId ->
-                        ensureActive()
-                        delay(32)
-                        val servers = loadGroup(groupId, forceRefresh)
-                        updateGroupUi(groupId, servers)
-                    }
-                }
+                // Do not eagerly decode hidden groups. With 100k+ profiles this
+                // unnecessarily multiplies memory use while only one page is visible.
+                preloadJob = null
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -680,13 +672,28 @@ class MainViewModel(
         }
     }
 
+    private suspend fun reorderCachedGroup(groupId: String) {
+        val cached = cacheMutex.withLock { groupDataCache[groupId] } ?: return
+        val order = dataSource.getServerGuidList(groupId)
+        if (order.isEmpty()) {
+            cacheMutex.withLock { groupDataCache[groupId] = emptyList() }
+            return
+        }
+        val byGuid = HashMap<String, ServersCache>(cached.size)
+        cached.forEach { byGuid[it.guid] = it }
+        val reordered = ArrayList<ServersCache>(order.size)
+        order.forEach { guid -> byGuid[guid]?.let(reordered::add) }
+        cacheMutex.withLock { groupDataCache[groupId] = reordered }
+        updateGroupUi(groupId, reordered)
+    }
+
     private fun sortByTestResultsAsync() {
         launchLoading {
             withContext(ioDispatcher) {
                 try {
-                    sortByTestResultsInternal()
-                    cacheMutex.withLock { groupDataCache.clear() }
-                    setupGroupTab(forceRefresh = true)
+                    val sortedGroups = sortByTestResultsInternal()
+                    sortedGroups.forEach { reorderCachedGroup(it) }
+                    setupGroupTab(forceRefresh = false)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (e: Exception) {
@@ -697,13 +704,14 @@ class MainViewModel(
         }
     }
 
-    private fun sortByTestResultsInternal() {
+    private fun sortByTestResultsInternal(): List<String> {
         val subs = if (uiState.value.selectedGroupId.isEmpty()) {
             dataSource.getSubsList()
         } else {
             listOf(uiState.value.selectedGroupId)
         }
         subs.forEach { dataSource.sortByTestResultsForSub(it) }
+        return subs
     }
 
     fun subscriptionIdChanged(id: String) {
