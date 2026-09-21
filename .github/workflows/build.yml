@@ -104,13 +104,6 @@ jobs:
     
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
-      with:
-        name: arm64-v8a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*arm64-v8a*.apk
-
-    - name: Upload arm64-v8a APK
-      uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
         name: arm64-v8a
