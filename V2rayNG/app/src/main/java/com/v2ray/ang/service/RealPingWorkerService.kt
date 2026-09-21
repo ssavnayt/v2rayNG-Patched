@@ -56,6 +56,10 @@ class RealPingWorkerService(
     private val runningCount = AtomicInteger(0)
     private val totalCount = AtomicInteger(0)
 
+    companion object {
+        private const val PROGRESS_UPDATE_INTERVAL = 100
+    }
+
     fun start() {
         val workerCount = minOf(
             guids.size,
@@ -87,7 +91,7 @@ class RealPingWorkerService(
                     } finally {
                         val left = totalCount.decrementAndGet()
                         runningCount.decrementAndGet()
-                        if (scope.isActive) {
+                        if (scope.isActive && (left == 0 || left % PROGRESS_UPDATE_INTERVAL == 0)) {
                             onEvent(RealPingEvent.Progress("$left / ${guids.size}"))
                         }
                     }
