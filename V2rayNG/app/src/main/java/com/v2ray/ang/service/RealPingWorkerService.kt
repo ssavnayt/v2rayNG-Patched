@@ -57,22 +57,39 @@ class RealPingWorkerService(
     private val totalCount = AtomicInteger(0)
 
     fun start() {
-        val jobs = guids.map { guid ->
-            totalCount.incrementAndGet()
+        val workerCount = minOf(
+            guids.size,
+            if (onlyTcp) concurrency * 2 else concurrency
+        )
+        if (workerCount == 0) {
+            onEvent(RealPingEvent.Finish("0"))
+            close()
+            return
+        }
+
+        totalCount.set(guids.size)
+        val nextIndex = AtomicInteger(0)
+        val workers = List(workerCount) {
             scope.launch {
-                runningCount.incrementAndGet()
-                try {
-                    val result = if (onlyTcp) startTcping(guid) else startRealPing(guid)
-                    if (scope.isActive) {
-                        onEvent(RealPingEvent.Result(guid, result))
-                    }
-                } catch (_: Throwable) {
-                    // ignore
-                } finally {
-                    val count = totalCount.decrementAndGet()
-                    val left = runningCount.decrementAndGet()
-                    if (scope.isActive) {
-                        onEvent(RealPingEvent.Progress("$left / $count"))
+                while (isActive) {
+                    val index = nextIndex.getAndIncrement()
+                    if (index >= guids.size) break
+
+                    val guid = guids[index]
+                    runningCount.incrementAndGet()
+                    try {
+                        val result = if (onlyTcp) startTcping(guid) else startRealPing(guid)
+                        if (scope.isActive) {
+                            onEvent(RealPingEvent.Result(guid, result))
+                        }
+                    } catch (_: Throwable) {
+                        // ignore
+                    } finally {
+                        val left = totalCount.decrementAndGet()
+                        runningCount.decrementAndGet()
+                        if (scope.isActive) {
+                            onEvent(RealPingEvent.Progress("$left / ${guids.size}"))
+                        }
                     }
                 }
             }
@@ -80,7 +97,7 @@ class RealPingWorkerService(
 
         scope.launch {
             try {
-                joinAll(*jobs.toTypedArray())
+                workers.joinAll()
                 if (isActive) {
                     onEvent(RealPingEvent.Finish("0"))
                 }
