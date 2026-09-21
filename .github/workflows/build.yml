@@ -87,21 +87,57 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Decode Keystore
-      uses: timheuer/base64-to-file@v2.0.0
-      id: android_keystore
-      with:
-        fileName: "android_keystore.jks"
-        encodedString: ${{ secrets.APP_KEYSTORE_BASE64 }}
+    - name: Prepare signing key
+      id: signing
+      env:
+        APP_KEYSTORE_BASE64: ${{ secrets.APP_KEYSTORE_BASE64 }}
+      run: |
+        set -euo pipefail
+        KEYSTORE="$RUNNER_TEMP/v2rayng-patched.jks"
+
+        if [ -n "${APP_KEYSTORE_BASE64:-}" ]; then
+          echo "$APP_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+          echo "Using repository signing keystore."
+        else
+          KEYSTORE_PASSWORD="$(openssl rand -hex 24)"
+          KEY_PASSWORD="$KEYSTORE_PASSWORD"
+          KEY_ALIAS="v2rayng-patched"
+          keytool -genkeypair -v             -keystore "$KEYSTORE"             -storetype JKS             -storepass "$KEYSTORE_PASSWORD"             -keypass "$KEY_PASSWORD"             -alias "$KEY_ALIAS"             -keyalg RSA             -keysize 2048             -validity 10000             -dname "CN=v2rayNG Patched, OU=Patched, O=ssavnayt"
+          printf '%s\n' "$KEYSTORE_PASSWORD" > "$RUNNER_TEMP/keystore-password.txt"
+          printf '%s\n' "$KEY_ALIAS" > "$RUNNER_TEMP/key-alias.txt"
+          printf '%s\n' "$KEY_PASSWORD" > "$RUNNER_TEMP/key-password.txt"
+          echo "generated=true" >> "$GITHUB_OUTPUT"
+          echo "keystore_password=$KEYSTORE_PASSWORD" >> "$GITHUB_OUTPUT"
+          echo "key_alias=$KEY_ALIAS" >> "$GITHUB_OUTPUT"
+          echo "key_password=$KEY_PASSWORD" >> "$GITHUB_OUTPUT"
+        fi
+
+        echo "keystore_path=$KEYSTORE" >> "$GITHUB_OUTPUT"
 
     - name: Build APK
+      env:
+        STORE_PASSWORD: ${{ steps.signing.outputs.keystore_password || secrets.APP_KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ steps.signing.outputs.key_alias || secrets.APP_KEYSTORE_ALIAS }}
+        KEY_PASSWORD: ${{ steps.signing.outputs.key_password || secrets.APP_KEY_PASSWORD }}
       run: |
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         ./gradlew licenseFdroidReleaseReport
-        ./gradlew assembleRelease -PABI_FILTERS=arm64-v8a -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
-    
+        ./gradlew assembleRelease -PABI_FILTERS=arm64-v8a           -Pandroid.injected.signing.store.file="${{ steps.signing.outputs.keystore_path }}"           -Pandroid.injected.signing.store.password="$STORE_PASSWORD"           -Pandroid.injected.signing.key.alias="$KEY_ALIAS"           -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+    - name: Export generated signing key
+      if: steps.signing.outputs.generated == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: patched-signing-key
+        path: |
+          ${{ steps.signing.outputs.keystore_path }}
+          ${{ runner.temp }}/keystore-password.txt
+          ${{ runner.temp }}/key-alias.txt
+          ${{ runner.temp }}/key-password.txt
+        retention-days: 7
+
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
